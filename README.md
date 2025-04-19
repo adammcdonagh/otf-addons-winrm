@@ -9,9 +9,44 @@ This repository contains addons to allow integration with Windows machines using
 
 Open Task Framework (OTF) is a Python based framework to make it easy to run predefined file transfers and scripts/commands on remote machines.
 
+# WinRM configuration
+
+```powershell
+New-LocalUser -Name "otf" -Password (ConvertTo-SecureString "password" -AsPlainText -Force)
+Add-LocalGroupMember -Group "Administrators" -Member "otf"
+
+$cert = New-SelfSignedCertificate -DnsName "localhost" -CertStoreLocation "cert:\LocalMachine\My" -NotAfter (Get-Date).AddYears(5)
+$thumbprint = $cert.Thumbprint
+
+winrm quickconfig -force
+winrm create winrm/config/Listener?Address=*+Transport=HTTPS "@{Hostname=`"localhost`";CertificateThumbprint=`"$thumbprint`"}"
+Set-Item WSMan:\localhost\Service\Auth\Certificate -Value $true
+
+# Ensure cert is in the root store so its trusted
+Import-Certificate -FilePath "winrm.crt" -CertStoreLocation Cert:\LocalMachine\Root
+
+$cert = Import-Certificate -FilePath "winrm.crt" -CertStoreLocation Cert:\LocalMachine\My
+
+New-Item -Path WSMan:\localhost\ClientCertificate `
+-Credential (Get-Credential) `
+-Subject "otf" `
+-URI * `
+-Force `
+-Issuer $cert.Thumbprint
+
+```
+
+```shell
+openssl genrsa -out winrm.key 2048
+openssl req -new -x509 -key winrm.key -out winrm.crt -days 365 -subj "/CN=otf"
+openssl x509 -in winrm.crt -noout -fingerprint -sha1
+```
+
+```powershell
+Import-PfxCertificate -
+```
 
 # Transfers
-
 
 ### Supported features
 
@@ -25,6 +60,4 @@ Open Task Framework (OTF) is a Python based framework to make it easy to run pre
 
 JSON configs for transfers can be defined as follows:
 
-
 # Executions
-

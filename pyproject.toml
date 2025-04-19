@@ -21,7 +21,7 @@ keywords = [
     "remote",
     "otf",
 ]
-dependencies = ["opentaskpy >= v25.4.0"]
+dependencies = ["pywinrm >= 0.5.0", "opentaskpy >= v24.19.0"]
 description = "Addons for opentaskpy, giving it the ability to interact with Windows machines via WinRM."
 readme = "README.md"
 requires-python = ">=3.11"
