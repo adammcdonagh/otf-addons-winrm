@@ -1,5 +1,4 @@
 # pylint: skip-file
-# ruff: noqa
 import pytest
 from opentaskpy.config.schemas import validate_execution_json
 
@@ -24,7 +23,9 @@ def valid_protocol_definition_certificate():
             "username": "otf",
             "transport": "certificate",
             "cert_pem": "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
-            "cert_key_pem": "-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----",
+            "cert_key_pem": (
+                "-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----"
+            ),
         },
     }
 
@@ -158,7 +159,7 @@ def test_winrm_optional_directory(valid_execution_ntlm):
 
 
 def test_winrm_certificate_missing_cert():
-    """Test that certificate transport requires cert_pem"""
+    """Test that certificate transport requires cert_pem."""
     json_data = {
         "type": "execution",
         "hostname": "192.168.1.199",
@@ -177,7 +178,7 @@ def test_winrm_certificate_missing_cert():
 
 
 def test_winrm_certificate_missing_key():
-    """Test that certificate transport requires cert_key_pem"""
+    """Test that certificate transport requires cert_key_pem."""
     json_data = {
         "type": "execution",
         "hostname": "192.168.1.199",
@@ -187,7 +188,9 @@ def test_winrm_certificate_missing_key():
             "credentials": {
                 "username": "otf",
                 "transport": "certificate",
-                "cert_pem": "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
+                "cert_pem": (
+                    "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----"
+                ),
                 # Missing cert_key_pem
             },
         },
@@ -197,7 +200,7 @@ def test_winrm_certificate_missing_key():
 
 
 def test_winrm_ntlm_missing_password():
-    """Test that ntlm transport requires password"""
+    """Test that ntlm transport requires password."""
     json_data = {
         "type": "execution",
         "hostname": "192.168.1.199",
@@ -216,7 +219,7 @@ def test_winrm_ntlm_missing_password():
 
 
 def test_winrm_basic_missing_password():
-    """Test that basic transport requires password"""
+    """Test that basic transport requires password."""
     json_data = {
         "type": "execution",
         "hostname": "192.168.1.199",
@@ -235,7 +238,7 @@ def test_winrm_basic_missing_password():
 
 
 def test_winrm_ssl_missing_password():
-    """Test that ssl transport requires password"""
+    """Test that ssl transport requires password."""
     json_data = {
         "type": "execution",
         "hostname": "192.168.1.199",

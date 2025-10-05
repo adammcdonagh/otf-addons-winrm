@@ -1,3 +1,4 @@
+# pylint: disable=no-name-in-module
 """Windows remote handler."""
 
 import logging
@@ -116,7 +117,7 @@ class WinRMExecution(RemoteExecutionHandler):
             # Use WMIC to get child processes
             command = f"wmic process where (ParentProcessId={parent_pid}) get ProcessId"
             command_id = self.winrm_protocol_client.run_command(shell_id, command)
-            stdout, stderr, return_code = self.winrm_protocol_client.get_command_output(
+            stdout, _, return_code = self.winrm_protocol_client.get_command_output(
                 shell_id, command_id
             )
 
@@ -196,7 +197,7 @@ class WinRMExecution(RemoteExecutionHandler):
                     f"[{self.remote_host}] Failed to cleanup command: {e}"
                 )
 
-    def _process_output_chunk(
+    def _process_output_chunk(  # pylint: disable=too-many-positional-arguments
         self,
         stdout: bytes,
         stderr: bytes,

@@ -8,7 +8,7 @@
 <h1>otf-addons-winrm</h1>
 
 - [Transfers](#transfers)
-    - [Supported features](#supported-features)
+  - [Supported features](#supported-features)
 - [Configuration](#configuration)
 - [Executions](#executions)
 - [WinRM Configuration](#winrm-configuration)

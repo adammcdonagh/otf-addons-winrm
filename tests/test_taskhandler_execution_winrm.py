@@ -1,5 +1,4 @@
 # pylint: skip-file
-# ruff: noqa
 import json
 import logging
 import os
@@ -131,12 +130,12 @@ def test_run_winrm_execution_cert(credentials):
         credentials["username"]
     )
 
-    with open(credentials["key"], "r") as key_file:
+    with open(credentials["key"]) as key_file:
         ipconfig_via_cert_task_definition["protocol"]["credentials"][
             "cert_key_pem"
         ] = key_file.read()
 
-    with open(credentials["certificate"], "r") as cert_file:
+    with open(credentials["certificate"]) as cert_file:
         ipconfig_via_cert_task_definition["protocol"]["credentials"][
             "cert_pem"
         ] = cert_file.read()
@@ -177,7 +176,6 @@ def test_run_winrm_execution_cert(credentials):
 
 def test_winrm_execution_timeout_kill(tmpdir, write_dummy_variables_file, credentials):
     """Test that WinRM execution timeout properly kills the remote process."""
-
     # Create a task definition that pings localhost 100 times (will take ~100 seconds)
     # Using ping is better than Start-Sleep as it creates a visible cmd.exe process
     # that we can clearly see in the process list
