@@ -18,7 +18,7 @@ os.environ["OTF_LOG_LEVEL"] = "DEBUG"
 # Create a task definition
 ipconfig_task_definition = {
     "type": "execution",
-    "hostmame": "",
+    "hostname": "",
     "command": "ipconfig /all",
     "protocol": {
         "name": "opentaskpy.addons.winrm.remotehandlers.winrm.WinRMExecution",

@@ -28,13 +28,94 @@ Open Task Framework (OTF) is a Python based framework to make it easy to run pre
 
 # Transfers
 
+WinRM transfers allow you to move files to/from Windows machines using PowerShell commands over WinRM. This provides an alternative to traditional file transfer protocols like SMB or FTP.
+
 ### Supported features
 
-- Plain file watch
-- File watch/transfer with file size and age constraints
-- `move`, `rename` & `delete` post copy actions
-- Touching empty files after transfer. e.g. `.fin` files used as completion flags
-- Touching empty files as an execution
+- **File transfers**: Push files to Windows machines or pull files from Windows machines using base64 encoding
+- **Plain file watch**: Monitor directories for new files matching patterns
+- **File watch/transfer with file size and age constraints**: Filter files based on size (bytes) and age (seconds since modification)
+- **Post-copy actions**: `move`, `rename`, and `delete` actions after successful transfer
+- **Directory creation**: Automatically creates destination directories if they don't exist
+- **File touching**: Create empty files (useful for completion flags like `.fin` files)
+- **Multiple destinations**: Transfer to multiple destinations in sequence
+- **Transfer types**: Support for both `push` (from source) and `pull` (to destination) operations
+
+### Configuration
+
+JSON configs for transfers can be defined as follows:
+
+```json
+{
+  "type": "transfer",
+  "source": {
+    "hostname": "192.168.1.199",
+    "directory": "C:\\data\\source",
+    "fileRegex": ".*\\.txt",
+    "conditionals": {
+      "size": {
+        "gt": 10,
+        "lt": 1048576
+      },
+      "age": {
+        "gt": 60,
+        "lt": 86400
+      }
+    },
+    "postCopyAction": {
+      "action": "move",
+      "destination": "C:\\data\\archive"
+    },
+    "protocol": {
+      "name": "opentaskpy.addons.winrm.remotehandlers.transfer.WinRMTransfer",
+      "server_cert_validation": "ignore",
+      "credentials": {
+        "transport": "ntlm",
+        "username": "otf",
+        "password": "YourSecurePassword",
+        "port": 5986
+      }
+    }
+  },
+  "destination": [
+    {
+      "hostname": "192.168.1.200",
+      "directory": "C:\\data\\dest",
+      "transferType": "push",
+      "permissions": {
+        "group": "Users"
+      }
+    }
+  ]
+}
+```
+
+### Transfer Process
+
+WinRM transfers work differently from traditional protocols:
+
+1. **File listing**: Uses PowerShell `Get-ChildItem` to list and filter files
+2. **File transfer**:
+   - **Push**: Reads local file, base64 encodes it, sends via PowerShell to remote machine
+   - **Pull**: Reads remote file via PowerShell, base64 encodes it, sends back and decodes locally
+3. **Post-copy actions**: Uses PowerShell cmdlets like `Move-Item`, `Rename-Item`, and `Remove-Item`
+4. **Directory operations**: Uses `New-Item` with `-ItemType Directory` to create directories
+
+### Limitations
+
+- **Performance**: Base64 encoding/decoding adds overhead for large files
+- **Binary files**: All files are treated as binary and encoded/decoded
+- **File permissions**: Limited permission management compared to native protocols
+- **Concurrent transfers**: Each file transfer requires a separate WinRM session
+
+### Use Cases
+
+WinRM transfers are ideal for:
+
+- Windows environments where WinRM is already configured
+- Scenarios requiring PowerShell-based file operations
+- Networks where traditional file transfer protocols are blocked
+- Integration with Windows-specific workflows and permissions
 
 # Configuration
 

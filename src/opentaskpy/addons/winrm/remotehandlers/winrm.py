@@ -1,62 +1,33 @@
 # pylint: disable=no-name-in-module
 """Windows remote handler."""
 
+import glob
 import logging
+import os
 import random
 import re
 import tempfile
 
 import opentaskpy.otflogging
-from opentaskpy.remotehandlers.remotehandler import RemoteExecutionHandler
+from opentaskpy.remotehandlers.remotehandler import (
+    RemoteExecutionHandler,
+    RemoteTransferHandler,
+)
 from winrm.exceptions import WinRMOperationTimeoutError
-from winrm.protocol import Protocol
+from winrm.protocol import Protocol  # pylint: disable=no-name-in-module
 
 
-class WinRMExecution(RemoteExecutionHandler):
-    """WinRM remote execution handler.
-
-    Allows execution of commands on a remote Windows machine via WinRM.
-    """
-
-    TASK_TYPE = "E"
+class WinRMBase:
+    """Base class for WinRM handlers providing shared authentication logic."""
 
     winrm_protocol_client: Protocol
     _cert_file: tempfile._TemporaryFileWrapper | None = None
     _key_file: tempfile._TemporaryFileWrapper | None = None
-    remote_pid: int | None = None
+    spec: dict
     remote_host: str
-    _kill_requested: bool = False
-    _shell_id: str | None = None
-    _command_id: str | None = None
 
-    def tidy(self) -> None:
-        """Tidy up."""
-        if self._cert_file:
-            self._cert_file.close()
-        if self._key_file:
-            self._key_file.close()
-        return
-
-    def __init__(self, spec: dict):
-        """Initialise the WinRMExecution handler.
-
-        Args:
-            spec (dict): The spec for the execution.
-        """
-        self.remote_host = spec["hostname"]
-        self.random = random.randint(
-            100000, 999999
-        )  # Random number used to make sure when we kill stuff, we always kill the right thing
-        self._kill_requested = False
-        self._shell_id = None
-        self._command_id = None
-
-        self.logger = opentaskpy.otflogging.init_logging(
-            __name__, spec["task_id"], self.TASK_TYPE
-        )
-
-        super().__init__(spec)
-
+    def _initialize_winrm_client(self) -> None:
+        """Initialize the WinRM protocol client based on spec configuration."""
         # Determine the kwargs for the WinRM client based on the options passed in the spec
         kwargs = {}
         kwargs["endpoint"] = (
@@ -67,16 +38,18 @@ class WinRMExecution(RemoteExecutionHandler):
         kwargs["server_cert_validation"] = self.spec["protocol"].get(
             "server_cert_validation", "validate"
         )
-        if (
-            self.spec["protocol"]["credentials"]["transport"] == "ntlm"
-            or self.spec["protocol"]["credentials"]["transport"] == "basic"
-            or self.spec["protocol"]["credentials"]["transport"] == "ssl"
-        ):
-            kwargs["password"] = self.spec["protocol"]["credentials"]["password"]
-        if self.spec["protocol"]["credentials"]["transport"] == "certificate":
-            # Decode base64 certificate and key data and write to temporary files
-            cert_data = self.spec["protocol"]["credentials"]["cert_pem"]
 
+        # Handle password-based authentication (ntlm, basic, ssl)
+        if self.spec["protocol"]["credentials"]["transport"] in [
+            "ntlm",
+            "basic",
+            "ssl",
+        ]:
+            kwargs["password"] = self.spec["protocol"]["credentials"]["password"]
+
+        # Handle certificate-based authentication
+        if self.spec["protocol"]["credentials"]["transport"] == "certificate":
+            cert_data = self.spec["protocol"]["credentials"]["cert_pem"]
             key_data = self.spec["protocol"]["credentials"]["cert_key_pem"]
 
             # Create temporary files that persist for the life of this object
@@ -98,6 +71,547 @@ class WinRMExecution(RemoteExecutionHandler):
             kwargs["cert_key_pem"] = self._key_file.name
 
         self.winrm_protocol_client = Protocol(**kwargs)
+
+    def _cleanup_temp_files(self) -> None:
+        """Clean up temporary certificate files."""
+        if self._cert_file:
+            self._cert_file.close()
+        if self._key_file:
+            self._key_file.close()
+
+
+class WinRMTransfer(WinRMBase, RemoteTransferHandler):
+    """WinRM remote transfer handler.
+
+    Allows file transfers to/from Windows machines via WinRM.
+    """
+
+    TASK_TYPE = "T"
+
+    def __init__(self, spec: dict):
+        """Initialise the WinRMTransfer handler.
+
+        Args:
+            spec (dict): The spec for the transfer.
+        """
+        self.spec = spec
+        self.remote_host = spec["hostname"]
+
+        self.logger = opentaskpy.otflogging.init_logging(
+            __name__, spec["task_id"], self.TASK_TYPE
+        )
+
+        self._initialize_winrm_client()
+
+        super().__init__(spec)
+
+    def list_files(
+        self,
+        directory: str | None = None,
+        file_pattern: str | None = None,
+    ) -> dict:
+        """List files in a directory with optional filtering.
+
+        Args:
+            directory (str): Directory to list files from
+            file_pattern (str): File pattern to match (PowerShell wildcard syntax)
+
+        Returns:
+            dict: Dictionary of files with path as key and metadata as value
+        """
+        if directory is None:
+            directory = str(self.spec.get("directory", "."))
+        if file_pattern is None:
+            file_pattern = str(self.spec.get("fileRegex", "*"))
+
+        # Build PowerShell command that worked
+        ps_script = (
+            f"& {{Get-ChildItem -Path '{directory}' -File -Filter '{file_pattern}' | ForEach-Object {{ $age_seconds = [int]((Get-Date) - $_.LastWriteTime).TotalSeconds; $size_bytes = [long]$_.Length; Write-Host ($_.Name + '|' + $_.FullName + '|' + $size_bytes + '|' + $age_seconds)}}}}"
+            ""
+        )
+
+        ps_command = f'powershell.exe -Command "{ps_script}"'
+
+        shell_id = self.winrm_protocol_client.open_shell()
+        try:
+            command_id = self.winrm_protocol_client.run_command(shell_id, ps_command)
+            stdout, stderr, return_code = self.winrm_protocol_client.get_command_output(
+                shell_id, command_id
+            )
+
+            if return_code != 0:
+                self.logger.error(
+                    f"[{self.remote_host}] Failed to list files: {stderr.decode('utf-8', errors='replace')}"
+                )
+                return {}
+
+            files = {}
+            for line in stdout.decode("utf-8", errors="replace").strip().split("\n"):
+                if "|" in line:
+                    name, full_path, size_str, age_str = line.split("|", 3)
+                    try:
+                        size = int(size_str)
+                        age = int(age_str)
+
+                        files[full_path] = {
+                            "size": size,
+                            "modified_time": age,
+                        }
+                    except (ValueError, IndexError):
+                        continue
+
+            return files
+
+        finally:
+            self.winrm_protocol_client.close_shell(shell_id)
+
+    def pull_file(self, remote_file: str, local_file: str) -> bool:
+        """Pull a file from the remote Windows machine.
+
+        Args:
+            remote_file (str): Remote file path
+            local_file (str): Local file path
+
+        Returns:
+            bool: True if successful
+        """
+        # For WinRM, we need to read the file content and write it locally
+        # This is less efficient than SCP but works over WinRM
+
+        ps_script = f"try {{ $content = Get-Content -Path '{remote_file}' -Raw -Encoding Byte; [System.Convert]::ToBase64String($content) }} catch {{ Write-Error $_.Exception.Message; exit 1 }}"
+        ps_command = f'powershell.exe -Command "{ps_script}"'
+
+        shell_id = self.winrm_protocol_client.open_shell()
+        try:
+            command_id = self.winrm_protocol_client.run_command(shell_id, ps_command)
+            stdout, stderr, return_code = self.winrm_protocol_client.get_command_output(
+                shell_id, command_id
+            )
+
+            if return_code != 0:
+                self.logger.error(
+                    f"[{self.remote_host}] Failed to read remote file: {stderr.decode('utf-8', errors='replace')}"
+                )
+                return False
+
+            # Decode base64 content and write to local file
+            try:
+                import base64
+
+                file_content = base64.b64decode(stdout.decode("utf-8").strip())
+                with open(local_file, "wb") as f:
+                    f.write(file_content)
+                return True
+            except Exception as e:
+                self.logger.error(
+                    f"[{self.remote_host}] Failed to write local file: {e}"
+                )
+                return False
+
+        finally:
+            self.winrm_protocol_client.close_shell(shell_id)
+
+    def push_file(self, local_file: str, remote_file: str) -> bool:
+        """Push a file to the remote Windows machine.
+
+        Args:
+            local_file (str): Local file path
+            remote_file (str): Remote file path
+
+        Returns:
+            bool: True if successful
+        """
+        # Read local file and encode as base64
+        try:
+            with open(local_file, "rb") as f:
+                file_content = f.read()
+            import base64
+
+            encoded_content = base64.b64encode(file_content).decode("utf-8")
+        except Exception as e:
+            self.logger.error(f"[{self.remote_host}] Failed to read local file: {e}")
+            return False
+
+        # Ensure remote directory exists
+        remote_dir = os.path.dirname(remote_file)
+        ps_script = f"try {{ if (!(Test-Path '{remote_dir}')) {{ New-Item -ItemType Directory -Path '{remote_dir}' -Force | Out-Null }}; $content = [System.Convert]::FromBase64String('{encoded_content}'); [System.IO.File]::WriteAllBytes('{remote_file}', $content) }} catch {{ Write-Error $_.Exception.Message; exit 1 }}"
+        ps_command = f'powershell.exe -Command "{ps_script}"'
+
+        shell_id = self.winrm_protocol_client.open_shell()
+        try:
+            command_id = self.winrm_protocol_client.run_command(shell_id, ps_command)
+            stdout, stderr, return_code = self.winrm_protocol_client.get_command_output(
+                shell_id, command_id
+            )
+
+            if return_code != 0:
+                self.logger.error(
+                    f"[{self.remote_host}] Failed to write remote file: {stderr.decode('utf-8', errors='replace')}"
+                )
+                return False
+
+            return True
+
+        finally:
+            self.winrm_protocol_client.close_shell(shell_id)
+
+    def move_file(self, src: str, dst: str) -> bool:
+        """Move a file on the remote machine.
+
+        Args:
+            src (str): Source file path
+            dst (str): Destination file path
+
+        Returns:
+            bool: True if successful
+        """
+        ps_script = f"Move-Item -Path '{src}' -Destination '{dst}'"
+        ps_command = f'powershell.exe -Command "{ps_script}"'
+
+        shell_id = self.winrm_protocol_client.open_shell()
+        try:
+            command_id = self.winrm_protocol_client.run_command(shell_id, ps_command)
+            stdout, stderr, return_code = self.winrm_protocol_client.get_command_output(
+                shell_id, command_id
+            )
+
+            if return_code != 0:
+                self.logger.error(
+                    f"[{self.remote_host}] Failed to move file: {stderr.decode('utf-8', errors='replace')}"
+                )
+                return False
+
+            return True
+
+        finally:
+            self.winrm_protocol_client.close_shell(shell_id)
+
+    def delete_file(self, remote_file: str) -> bool:
+        """Delete a file on the remote machine.
+
+        Args:
+            remote_file (str): Remote file path
+
+        Returns:
+            bool: True if successful
+        """
+        ps_script = f"Remove-Item -Path '{remote_file}' -Force"
+        ps_command = f'powershell.exe -Command "{ps_script}"'
+
+        shell_id = self.winrm_protocol_client.open_shell()
+        try:
+            command_id = self.winrm_protocol_client.run_command(shell_id, ps_command)
+            stdout, stderr, return_code = self.winrm_protocol_client.get_command_output(
+                shell_id, command_id
+            )
+
+            if return_code != 0:
+                self.logger.error(
+                    f"[{self.remote_host}] Failed to delete file: {stderr.decode('utf-8', errors='replace')}"
+                )
+                return False
+
+            return True
+
+        finally:
+            self.winrm_protocol_client.close_shell(shell_id)
+
+    def create_directory_if_not_exists(self, remote_directory: str) -> bool:
+        """Create a directory on the remote machine if it doesn't exist.
+
+        Args:
+            remote_directory (str): Remote directory path
+
+        Returns:
+            bool: True if successful
+        """
+        ps_script = f"if (!(Test-Path '{remote_directory}')) {{ New-Item -ItemType Directory -Path '{remote_directory}' -Force | Out-Null }}"
+        ps_command = f'powershell.exe -Command "{ps_script}"'
+
+        shell_id = self.winrm_protocol_client.open_shell()
+        try:
+            command_id = self.winrm_protocol_client.run_command(shell_id, ps_command)
+            stdout, stderr, return_code = self.winrm_protocol_client.get_command_output(
+                shell_id, command_id
+            )
+
+            if return_code != 0:
+                self.logger.error(
+                    f"[{self.remote_host}] Failed to create directory: {stderr.decode('utf-8', errors='replace')}"
+                )
+                return False
+
+            return True
+
+        finally:
+            self.winrm_protocol_client.close_shell(shell_id)
+
+    def touch_file(self, remote_file: str) -> bool:
+        """Create an empty file on the remote machine.
+
+        Args:
+            remote_file (str): Remote file path
+
+        Returns:
+            bool: True if successful
+        """
+        ps_script = f"New-Item -ItemType File -Path '{remote_file}' -Force | Out-Null"
+        ps_command = f'powershell.exe -Command "{ps_script}"'
+
+        shell_id = self.winrm_protocol_client.open_shell()
+        try:
+            command_id = self.winrm_protocol_client.run_command(shell_id, ps_command)
+            stdout, stderr, return_code = self.winrm_protocol_client.get_command_output(
+                shell_id, command_id
+            )
+
+            if return_code != 0:
+                self.logger.error(
+                    f"[{self.remote_host}] Failed to touch file: {stderr.decode('utf-8', errors='replace')}"
+                )
+                return False
+
+            return True
+
+        finally:
+            self.winrm_protocol_client.close_shell(shell_id)
+
+    def get_file_size(self, remote_file: str) -> int:
+        """Get the size of a remote file.
+
+        Args:
+            remote_file (str): Remote file path
+
+        Returns:
+            int: File size in bytes, or -1 if error
+        """
+        ps_script = f"(Get-Item '{remote_file}').Length"
+        ps_command = f'powershell.exe -Command "{ps_script}"'
+
+        shell_id = self.winrm_protocol_client.open_shell()
+        try:
+            command_id = self.winrm_protocol_client.run_command(shell_id, ps_command)
+            stdout, stderr, return_code = self.winrm_protocol_client.get_command_output(
+                shell_id, command_id
+            )
+
+            if return_code != 0:
+                self.logger.error(
+                    f"[{self.remote_host}] Failed to get file size: {stderr.decode('utf-8', errors='replace')}"
+                )
+                return -1
+
+            try:
+                return int(stdout.decode("utf-8").strip())
+            except (ValueError, AttributeError):
+                return -1
+
+        finally:
+            self.winrm_protocol_client.close_shell(shell_id)
+
+    def get_file_age(self, remote_file: str) -> int:
+        """Get the age of a remote file in seconds.
+
+        Args:
+            remote_file (str): Remote file path
+
+        Returns:
+            int: File age in seconds, or -1 if error
+        """
+        ps_script = (
+            f"[int]((Get-Date) - (Get-Item '{remote_file}').LastWriteTime).TotalSeconds"
+        )
+        ps_command = f'powershell.exe -Command "{ps_script}"'
+
+        shell_id = self.winrm_protocol_client.open_shell()
+        try:
+            command_id = self.winrm_protocol_client.run_command(shell_id, ps_command)
+            stdout, stderr, return_code = self.winrm_protocol_client.get_command_output(
+                shell_id, command_id
+            )
+
+            if return_code != 0:
+                self.logger.error(
+                    f"[{self.remote_host}] Failed to get file age: {stderr.decode('utf-8', errors='replace')}"
+                )
+                return -1
+
+            try:
+                return int(stdout.decode("utf-8").strip())
+            except (ValueError, AttributeError):
+                return -1
+
+        finally:
+            self.winrm_protocol_client.close_shell(shell_id)
+
+    def supports_direct_transfer(self) -> bool:
+        """Return False, as WinRM does not support direct transfers."""
+        return False
+
+    def transfer_files(
+        self,
+    ) -> int:
+        """Transfer files to a remote location.
+
+        Args:
+            files (list[str]): The files to transfer.
+            remote_spec (dict): The remote spec for the transfer.
+            dest_remote_handler (dict | None): The destination remote handler.
+
+        Returns:
+            int: 0 if successful, 1 if not.
+        """
+        self.logger.error(
+            "Direct transfer between remote systems is not supported by WinRM."
+        )
+        return 1
+
+    def push_files_from_worker(
+        self, local_staging_directory: str, file_list: dict | None = None
+    ) -> int:
+        """Push files from the worker to the remote location.
+
+        Args:
+            local_staging_directory (str): The local staging directory.
+            file_list (dict | None): The list of files to transfer. Defaults to None.
+
+        Returns:
+            int: 0 if successful, 1 if not.
+        """
+        result = 0
+
+        if file_list:
+            files = list(file_list.keys())
+        else:
+            # Get list of files in local_staging_directory
+            files = glob.glob(f"{local_staging_directory}/*")
+
+        for file in files:
+            local_file = os.path.join(local_staging_directory, file)
+            remote_file = os.path.join(self.spec["directory"], file)
+            if not self.push_file(local_file, remote_file):
+                result = 1
+        return result
+
+    def pull_files_to_worker(
+        self, files: list[str], local_staging_directory: str
+    ) -> int:
+        """Pull files from the remote location to the worker.
+
+        Args:
+            files (list[str]): The files to pull.
+            local_staging_directory (str): The local staging directory.
+
+        Returns:
+            int: 0 if successful, 1 if not.
+        """
+        result = 0
+        os.makedirs(local_staging_directory, exist_ok=True)
+        for remote_file in files:
+            local_file = os.path.join(
+                local_staging_directory, os.path.basename(remote_file)
+            )
+            if not self.pull_file(remote_file, local_file):
+                result = 1
+        return result
+
+    def pull_files(self, files: list[str]) -> int:
+        """Pull files from the remote location to the destination system.
+
+        Args:
+            files (list[str]): The files to pull.
+
+        Returns:
+            int: 0 if successful, 1 if not.
+        """
+        self.logger.error(
+            "Direct pull between remote systems is not supported by WinRM."
+        )
+        return 1
+
+    def move_files_to_final_location(self, files: dict) -> int:
+        """Move files to their final location.
+
+        Args:
+            files (dict): The files to move.
+
+        Returns:
+            int: 0 if successful, 1 if not.
+        """
+        result = 0
+        for src, _ in files.items():
+            dst = os.path.join(self.spec["directory"], os.path.basename(src))
+            if not self.move_file(src, dst):
+                result = 1
+        return result
+
+    def handle_post_copy_action(self, files: list[str]) -> int:
+        """Handle any post copy actions.
+
+        Args:
+            files (list[str]): The files to act on.
+
+        Returns:
+            int: 0 if successful, 1 if not.
+        """
+        result = 0
+        action = self.spec.get("postCopyAction", {}).get("action")
+        if action == "delete":
+            for file in files:
+                if not self.delete_file(file):
+                    result = 1
+        elif action == "move":
+            destination = self.spec["postCopyAction"].get("destination")
+            for file in files:
+                dst = os.path.join(destination, os.path.basename(file))
+                if not self.move_file(file, dst):
+                    result = 1
+        return result
+
+
+class WinRMExecution(WinRMBase, RemoteExecutionHandler):
+    """WinRM remote execution handler.
+
+    Allows execution of commands on a remote Windows machine via WinRM.
+    """
+
+    TASK_TYPE = "E"
+
+    remote_pid: int | None = None
+    _kill_requested: bool = False
+    _shell_id: str | None = None
+    _command_id: str | None = None
+
+    def tidy(self) -> None:
+        """Tidy up."""
+        if self._cert_file:
+            self._cert_file.close()
+        if self._key_file:
+            self._key_file.close()
+        return
+
+    def __init__(self, spec: dict):
+        """Initialise the WinRMExecution handler.
+
+        Args:
+            spec (dict): The spec for the execution.
+        """
+        self.spec = spec
+        self.remote_host = spec["hostname"]
+        self.random = random.randint(
+            100000, 999999
+        )  # Random number used to make sure when we kill stuff, we always kill the right thing
+        self._kill_requested = False
+        self._shell_id = None
+        self._command_id = None
+
+        self.logger = opentaskpy.otflogging.init_logging(
+            __name__, spec["task_id"], self.TASK_TYPE
+        )
+
+        self._initialize_winrm_client()
+
+        super().__init__(spec)
 
     def _get_child_processes(self, parent_pid: int) -> list:
         """Get the child processes of a given PID on Windows.
