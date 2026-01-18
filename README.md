@@ -7,10 +7,10 @@
 <h1>otf-addons-winrm</h1>
 
 - [Transfers](#transfers)
-    - [Supported features](#supported-features)
-    - [Configuration](#configuration)
-    - [Transfer Process](#transfer-process)
-    - [Limitations](#limitations)
+  - [Supported features](#supported-features)
+  - [Configuration](#configuration)
+  - [Transfer Process](#transfer-process)
+  - [Limitations](#limitations)
 - [Configuration](#configuration-1)
 - [Executions](#executions)
   - [Example Configuration with NTLM auth](#example-configuration-with-ntlm-auth)
