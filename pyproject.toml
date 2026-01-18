@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "otf-addons-winrm"
-version = "v25.4.0"
+version = "v26.2.0"
 authors = [{ name = "Adam McDonagh", email = "adam@elitemonkey.net" }]
 license = { text = "GPLv3" }
 classifiers = [
@@ -21,7 +21,7 @@ keywords = [
     "remote",
     "otf",
 ]
-dependencies = ["opentaskpy >= v25.4.0"]
+dependencies = ["pywinrm >= 0.5.0", "opentaskpy >= v24.19.0"]
 description = "Addons for opentaskpy, giving it the ability to interact with Windows machines via WinRM."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -44,6 +44,7 @@ dev = [
     "coverage",
     "pytest-cov",
     "freezegun",
+    "dotenv"
 ]
 
 [project.urls]
@@ -55,7 +56,7 @@ dev = [
 profile = 'black'
 
 [tool.bumpver]
-current_version = "v25.4.0"
+current_version = "v26.2.0"
 version_pattern = "vYY.WW.PATCH[-TAG]"
 commit_message = "bump version {old_version} -> {new_version}"
 commit = true
@@ -371,8 +372,6 @@ ignore = [
     "D407", # Section name underlining
     "E501", # line too long
     "E731", # do not assign a lambda expression, use a def
-    # Ignored due to performance: https://github.com/charliermarsh/ruff/issues/2923
-    "UP038", # Use `X | Y` in `isinstance` call instead of `(X, Y)`
 ]
 
 
@@ -381,7 +380,7 @@ convention = "google"
 
 [tool.ruff.per-file-ignores]
 "__init__.py" = ["D104"]
-"tests/*.py" = ["D103", "D100", "F405"]
+"tests/*.py" = ["D103", "D100", "F405", "ARG001"]
 
 
 [tool.ruff.mccabe]

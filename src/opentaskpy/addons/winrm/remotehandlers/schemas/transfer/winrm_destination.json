@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "http://localhost/transfer/winrm_destination.json",
+  "type": "object",
+  "properties": {
+    "hostname": {
+      "type": "string"
+    },
+    "directory": {
+      "type": "string"
+    },
+    "createDirectoryIfNotExists": {
+      "type": "boolean",
+      "default": false
+    },
+    "transferType": {
+      "type": "string",
+      "enum": ["push", "pull"],
+      "default": "push"
+    },
+    "rename": {
+      "$ref": "winrm_destination/rename.json"
+    },
+    "protocol": {
+      "$ref": "winrm_destination/protocol.json"
+    }
+  },
+  "additionalProperties": false,
+  "required": ["hostname", "directory", "protocol"]
+}

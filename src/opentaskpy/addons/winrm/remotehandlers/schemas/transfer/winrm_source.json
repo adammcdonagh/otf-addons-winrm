@@ -1,0 +1,33 @@
+{
+  "$id": "http://localhost/transfer/winrm_source.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "hostname": {
+      "type": "string"
+    },
+    "directory": {
+      "type": "string"
+    },
+    "fileRegex": {
+      "type": "string"
+    },
+    "conditionals": {
+      "$ref": "winrm_source/conditionals.json"
+    },
+    "fileWatch": {
+      "$ref": "winrm_source/fileWatch.json"
+    },
+    "error": {
+      "type": "boolean"
+    },
+    "postCopyAction": {
+      "$ref": "winrm_source/postCopyAction.json"
+    },
+    "protocol": {
+      "$ref": "winrm_source/protocol.json"
+    }
+  },
+  "additionalProperties": false,
+  "required": ["hostname", "protocol", "directory", "fileRegex"]
+}
