@@ -1,14 +1,17 @@
 # pylint: disable=no-name-in-module
 """Windows remote handler."""
 
+import base64
 import glob
 import logging
+import ntpath
 import os
 import random
 import re
 import tempfile
 
 import opentaskpy.otflogging
+import xmltodict
 from opentaskpy.remotehandlers.remotehandler import (
     RemoteExecutionHandler,
     RemoteTransferHandler,
@@ -124,13 +127,22 @@ class WinRMTransfer(WinRMBase, RemoteTransferHandler):
         if file_pattern is None:
             file_pattern = str(self.spec.get("fileRegex", "*"))
 
+        # Escape single quotes in the pattern for PowerShell
+        safe_pattern = file_pattern.replace("'", "''")
+        safe_directory = directory.replace("'", "''")
+
         # Build PowerShell command that worked
         ps_script = (
-            f"& {{Get-ChildItem -Path '{directory}' -File -Filter '{file_pattern}' | ForEach-Object {{ $age_seconds = [int]((Get-Date) - $_.LastWriteTime).TotalSeconds; $size_bytes = [long]$_.Length; Write-Host ($_.Name + '|' + $_.FullName + '|' + $size_bytes + '|' + $age_seconds)}}}}"
-            ""
+            "$dir = $args[0]; "
+            "$pattern = $args[1]; "
+            "Get-ChildItem -Path $dir -File | Where-Object { $_.Name -match $pattern } | ForEach-Object { "
+            "  $age_seconds = [int]((Get-Date) - $_.LastWriteTime).TotalSeconds; "
+            "  $size_bytes = [long]$_.Length; "
+            "  Write-Host ($_.Name + '|' + $_.FullName + '|' + $size_bytes + '|' + $age_seconds) "
+            "}"
         )
 
-        ps_command = f'powershell.exe -Command "{ps_script}"'
+        ps_command = f"powershell.exe -Command \"& {{ {ps_script} }} '{safe_directory}' '{safe_pattern}'\""
 
         shell_id = self.winrm_protocol_client.open_shell()
         try:
@@ -148,10 +160,13 @@ class WinRMTransfer(WinRMBase, RemoteTransferHandler):
             files = {}
             for line in stdout.decode("utf-8", errors="replace").strip().split("\n"):
                 if "|" in line:
-                    name, full_path, size_str, age_str = line.split("|", 3)
+                    _, full_path, size_str, age_str = line.split("|", 3)
                     try:
                         size = int(size_str)
                         age = int(age_str)
+
+                        # OTF doesn't support backslashes in file keys, so convert to forward slashes
+                        full_path = full_path.replace("\\", "/")
 
                         files[full_path] = {
                             "size": size,
@@ -196,7 +211,6 @@ class WinRMTransfer(WinRMBase, RemoteTransferHandler):
 
             # Decode base64 content and write to local file
             try:
-                import base64
 
                 file_content = base64.b64decode(stdout.decode("utf-8").strip())
                 with open(local_file, "wb") as f:
@@ -212,7 +226,7 @@ class WinRMTransfer(WinRMBase, RemoteTransferHandler):
             self.winrm_protocol_client.close_shell(shell_id)
 
     def push_file(self, local_file: str, remote_file: str) -> bool:
-        """Push a file to the remote Windows machine.
+        """Push a file to the remote Windows machine using Ansible's stdin approach.
 
         Args:
             local_file (str): Local file path
@@ -221,36 +235,126 @@ class WinRMTransfer(WinRMBase, RemoteTransferHandler):
         Returns:
             bool: True if successful
         """
-        # Read local file and encode as base64
+        self.logger.info(
+            f"[{self.remote_host}] Pushing file: {local_file} -> {remote_file}"
+        )
+
+        # Read local file
         try:
             with open(local_file, "rb") as f:
                 file_content = f.read()
-            import base64
-
-            encoded_content = base64.b64encode(file_content).decode("utf-8")
+            self.logger.info(
+                f"[{self.remote_host}] Read {len(file_content)} bytes from {local_file}"
+            )
         except Exception as e:
             self.logger.error(f"[{self.remote_host}] Failed to read local file: {e}")
             return False
 
-        # Ensure remote directory exists
-        remote_dir = os.path.dirname(remote_file)
-        ps_script = f"try {{ if (!(Test-Path '{remote_dir}')) {{ New-Item -ItemType Directory -Path '{remote_dir}' -Force | Out-Null }}; $content = [System.Convert]::FromBase64String('{encoded_content}'); [System.IO.File]::WriteAllBytes('{remote_file}', $content) }} catch {{ Write-Error $_.Exception.Message; exit 1 }}"
-        ps_command = f'powershell.exe -Command "{ps_script}"'
+        # Load the PowerShell script from disk (Ansible's approach)
+        ps_script_path = os.path.join(os.path.dirname(__file__), "winrm_put_file.ps1")
+        try:
+            with open(ps_script_path, encoding="utf-8") as f:
+                ps_script = f.read()
+        except Exception as e:
+            self.logger.error(
+                f"[{self.remote_host}] Failed to load PowerShell script: {e}"
+            )
+            return False
+
+        # Invoke the script with -Path parameter, reading data from pipeline
+        # Use -EncodedCommand to avoid quote/brace escaping issues (Ansible's pattern via _encode_script)
+        full_command = f"$input | & {{ {ps_script} }} -Path '{remote_file}'"
+
+        # Encode as UTF-16LE then base64 for -EncodedCommand
+        command_bytes = full_command.encode("utf-16-le")
+        encoded_command = base64.b64encode(command_bytes).decode("ascii")
+
+        ps_command = f"powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {encoded_command}"
 
         shell_id = self.winrm_protocol_client.open_shell()
         try:
+            # Run the command
             command_id = self.winrm_protocol_client.run_command(shell_id, ps_command)
+
+            # Send base64-encoded file content via stdin using SOAP message (Ansible's approach)
+            # Chunk the data (250KB chunks like Ansible)
+            chunk_size = 250 * 1024
+            offset = 0
+            chunk_count = 0
+
+            with open(local_file, "rb") as in_file:
+                while True:
+                    chunk = in_file.read(chunk_size)
+                    if not chunk:
+                        break
+
+                    chunk_count += 1
+                    offset += len(chunk)
+
+                    # Base64 encode the chunk and add newline (Ansible does this)
+                    b64_data = base64.b64encode(chunk).decode("utf-8") + "\r\n"
+
+                    # Build SOAP message for sending stdin data
+                    rq = {
+                        "env:Envelope": self.winrm_protocol_client._get_soap_header(  # pylint: disable=protected-access
+                            resource_uri="http://schemas.microsoft.com/wbem/wsman/1/windows/shell/cmd",
+                            action="http://schemas.microsoft.com/wbem/wsman/1/windows/shell/Send",
+                            shell_id=shell_id,
+                        )
+                    }
+                    stream = (
+                        rq["env:Envelope"]
+                        .setdefault("env:Body", {})
+                        .setdefault("rsp:Send", {})
+                        .setdefault("rsp:Stream", {})
+                    )
+                    stream["@Name"] = "stdin"
+                    stream["@CommandId"] = command_id
+                    stream["#text"] = base64.b64encode(b64_data.encode())
+
+                    # Mark the last chunk with End=true
+                    is_last = in_file.tell() == len(file_content)
+                    if is_last:
+                        stream["@End"] = "true"
+
+                    self.winrm_protocol_client.send_message(xmltodict.unparse(rq))
+
+            self.logger.info(
+                f"[{self.remote_host}] Sent {chunk_count} chunk(s) totaling {offset} bytes via stdin"
+            )
+
+            # Get command output
             stdout, stderr, return_code = self.winrm_protocol_client.get_command_output(
                 shell_id, command_id
             )
 
+            stdout_str = stdout.decode("utf-8", errors="replace").strip()
+            stderr_str = stderr.decode("utf-8", errors="replace").strip()
+
+            # Log output if not blank
+            if stdout_str:
+                self.logger.info(
+                    f"[{self.remote_host}] PowerShell stdout: {stdout_str}"
+                )
+            if stderr_str:
+                self.logger.warning(
+                    f"[{self.remote_host}] PowerShell stderr: {stderr_str}"
+                )
+
             if return_code != 0:
                 self.logger.error(
-                    f"[{self.remote_host}] Failed to write remote file: {stderr.decode('utf-8', errors='replace')}"
+                    f"[{self.remote_host}] Failed to write remote file (return code {return_code}): {stderr_str}"
                 )
                 return False
 
+            self.logger.info(
+                f"[{self.remote_host}] Successfully pushed file to {remote_file}"
+            )
             return True
+
+        except Exception as e:
+            self.logger.error(f"[{self.remote_host}] Exception pushing file: {e}")
+            return False
 
         finally:
             self.winrm_protocol_client.close_shell(shell_id)
@@ -265,7 +369,16 @@ class WinRMTransfer(WinRMBase, RemoteTransferHandler):
         Returns:
             bool: True if successful
         """
-        ps_script = f"Move-Item -Path '{src}' -Destination '{dst}'"
+        # Convert forward slashes to backslashes for Windows paths
+        src_win = src.replace("/", "\\")
+        dst_win = dst.replace("/", "\\")
+
+        # Ensure destination directory exists before moving
+        dst_dir = ntpath.dirname(dst_win)
+        ps_script = (
+            f"if (!(Test-Path '{dst_dir}')) {{ New-Item -ItemType Directory -Path '{dst_dir}' -Force | Out-Null }}; "
+            f"Move-Item -Path '{src_win}' -Destination '{dst_win}' -Force"
+        )
         ps_command = f'powershell.exe -Command "{ps_script}"'
 
         shell_id = self.winrm_protocol_client.open_shell()
@@ -277,7 +390,10 @@ class WinRMTransfer(WinRMBase, RemoteTransferHandler):
 
             if return_code != 0:
                 self.logger.error(
-                    f"[{self.remote_host}] Failed to move file: {stderr.decode('utf-8', errors='replace')}"
+                    f"[{self.remote_host}] STDOUT: {stdout.decode('utf-8', errors='replace')}"
+                )
+                self.logger.error(
+                    f"[{self.remote_host}] Failed to move file from {src_win} to {dst_win}: {stderr.decode('utf-8', errors='replace')}"
                 )
                 return False
 
@@ -295,7 +411,10 @@ class WinRMTransfer(WinRMBase, RemoteTransferHandler):
         Returns:
             bool: True if successful
         """
-        ps_script = f"Remove-Item -Path '{remote_file}' -Force"
+        # Convert forward slashes to backslashes for Windows paths
+        remote_file_win = remote_file.replace("/", "\\")
+
+        ps_script = f"Remove-Item -Path '{remote_file_win}' -Force"
         ps_command = f'powershell.exe -Command "{ps_script}"'
 
         shell_id = self.winrm_protocol_client.open_shell()
@@ -306,6 +425,9 @@ class WinRMTransfer(WinRMBase, RemoteTransferHandler):
             )
 
             if return_code != 0:
+                self.logger.error(
+                    f"[{self.remote_host}] STDOUT: {stdout.decode('utf-8', errors='replace')}"
+                )
                 self.logger.error(
                     f"[{self.remote_host}] Failed to delete file: {stderr.decode('utf-8', errors='replace')}"
                 )
@@ -337,6 +459,9 @@ class WinRMTransfer(WinRMBase, RemoteTransferHandler):
 
             if return_code != 0:
                 self.logger.error(
+                    f"[{self.remote_host}] STDOUT: {stdout.decode('utf-8', errors='replace')}"
+                )
+                self.logger.error(
                     f"[{self.remote_host}] Failed to create directory: {stderr.decode('utf-8', errors='replace')}"
                 )
                 return False
@@ -366,6 +491,9 @@ class WinRMTransfer(WinRMBase, RemoteTransferHandler):
             )
 
             if return_code != 0:
+                self.logger.error(
+                    f"[{self.remote_host}] STDOUT: {stdout.decode('utf-8', errors='replace')}"
+                )
                 self.logger.error(
                     f"[{self.remote_host}] Failed to touch file: {stderr.decode('utf-8', errors='replace')}"
                 )
@@ -487,8 +615,23 @@ class WinRMTransfer(WinRMBase, RemoteTransferHandler):
             files = glob.glob(f"{local_staging_directory}/*")
 
         for file in files:
-            local_file = os.path.join(local_staging_directory, file)
-            remote_file = os.path.join(self.spec["directory"], file)
+            # Handle any rename that might be specified in the spec
+            remote_file = file
+            if "rename" in self.spec:
+                rename_regex = self.spec["rename"]["pattern"]
+                rename_sub = self.spec["rename"]["sub"]
+
+                remote_file = re.sub(rename_regex, rename_sub, file)
+                self.logger.info(
+                    f"[{self.spec['hostname']}] Renaming file to {remote_file}"
+                )
+
+            local_file = os.path.join(local_staging_directory, os.path.basename(file))
+            # Use ntpath.join for Windows remote paths
+            remote_file = ntpath.join(
+                self.spec["directory"], os.path.basename(remote_file)
+            )
+
             if not self.push_file(local_file, remote_file):
                 result = 1
         return result
@@ -515,7 +658,7 @@ class WinRMTransfer(WinRMBase, RemoteTransferHandler):
                 result = 1
         return result
 
-    def pull_files(self, files: list[str]) -> int:
+    def pull_files(self, files: list[str]) -> int:  # noqa: ARG002
         """Pull files from the remote location to the destination system.
 
         Args:
@@ -540,7 +683,8 @@ class WinRMTransfer(WinRMBase, RemoteTransferHandler):
         """
         result = 0
         for src, _ in files.items():
-            dst = os.path.join(self.spec["directory"], os.path.basename(src))
+            # Use ntpath.join for Windows remote paths
+            dst = ntpath.join(self.spec["directory"], os.path.basename(src))
             if not self.move_file(src, dst):
                 result = 1
         return result
@@ -563,7 +707,8 @@ class WinRMTransfer(WinRMBase, RemoteTransferHandler):
         elif action == "move":
             destination = self.spec["postCopyAction"].get("destination")
             for file in files:
-                dst = os.path.join(destination, os.path.basename(file))
+                # Use ntpath.join for Windows remote paths
+                dst = ntpath.join(destination, os.path.basename(file))
                 if not self.move_file(file, dst):
                     result = 1
         return result

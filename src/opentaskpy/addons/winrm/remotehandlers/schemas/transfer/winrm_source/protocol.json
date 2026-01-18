@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "http://localhost/transfer/winrm_source/protocol.json",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "enum": ["opentaskpy.addons.winrm.remotehandlers.winrm.WinRMTransfer"]
+    },
+    "port": {
+      "type": "integer"
+    },
+    "server_cert_validation": {
+      "type": "string",
+      "enum": ["validate", "ignore"],
+      "default": "validate"
+    },
+    "retry": {
+      "type": "boolean",
+      "default": true
+    },
+    "timeout": {
+      "type": "integer"
+    },
+    "credentials": {
+      "type": "object",
+      "properties": {
+        "username": {
+          "type": "string"
+        },
+        "password": {
+          "type": "string"
+        },
+        "transport": {
+          "type": "string",
+          "enum": ["ntlm", "basic", "ssl", "certificate"]
+        },
+        "cert_pem": {
+          "type": "string"
+        },
+        "cert_key_pem": {
+          "type": "string"
+        }
+      },
+      "required": ["username", "transport"],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "transport": {
+                "enum": ["ntlm", "basic", "ssl"]
+              }
+            }
+          },
+          "then": {
+            "required": ["password"]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "transport": {
+                "const": "certificate"
+              }
+            }
+          },
+          "then": {
+            "required": ["cert_pem", "cert_key_pem"]
+          }
+        }
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": ["name", "credentials"],
+  "additionalProperties": false
+}

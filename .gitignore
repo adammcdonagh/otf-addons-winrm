@@ -176,8 +176,12 @@ poetry.toml
 
 # End of https://www.toptal.com/developers/gitignore/api/python
 
+CONVERSATION_CONTEXT.md
+
 test/testFiles
 test/volume
 tests/volume
 
 .envrc
+*.crt
+*.key

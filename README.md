@@ -9,8 +9,15 @@
 
 - [Transfers](#transfers)
   - [Supported features](#supported-features)
-- [Configuration](#configuration)
+  - [Configuration](#configuration)
+  - [Transfer Process](#transfer-process)
+  - [Limitations](#limitations)
+- [Configuration](#configuration-1)
 - [Executions](#executions)
+  - [Example Configuration with NTLM auth](#example-configuration-with-ntlm-auth)
+    - [Example Configuration with Certificate-Based Authentication](#example-configuration-with-certificate-based-authentication)
+  - [Usage with Batches and Timeouts](#usage-with-batches-and-timeouts)
+  - [Important Points](#important-points)
 - [WinRM Configuration](#winrm-configuration)
   - [Prerequisites - Create Local User (Windows Server)](#prerequisites---create-local-user-windows-server)
   - [Option 1: Username/Password Authentication (NTLM/Basic)](#option-1-usernamepassword-authentication-ntlmbasic)
@@ -28,18 +35,18 @@ Open Task Framework (OTF) is a Python based framework to make it easy to run pre
 
 # Transfers
 
-WinRM transfers allow you to move files to/from Windows machines using PowerShell commands over WinRM. This provides an alternative to traditional file transfer protocols like SMB or FTP.
+WinRM transfers allow you to move files to/from Windows machines using PowerShell commands over WinRM.
 
 ### Supported features
 
-- **File transfers**: Push files to Windows machines or pull files from Windows machines using base64 encoding
-- **Plain file watch**: Monitor directories for new files matching patterns
-- **File watch/transfer with file size and age constraints**: Filter files based on size (bytes) and age (seconds since modification)
-- **Post-copy actions**: `move`, `rename`, and `delete` actions after successful transfer
-- **Directory creation**: Automatically creates destination directories if they don't exist
-- **File touching**: Create empty files (useful for completion flags like `.fin` files)
-- **Multiple destinations**: Transfer to multiple destinations in sequence
-- **Transfer types**: Support for both `push` (from source) and `pull` (to destination) operations
+- Push files to Windows machines or pull files from Windows machines using base64 encoding
+- Monitor directories for new files matching patterns
+- File watch/transfer with file size and age constraints
+- `move`, `rename`, and `delete` actions after successful transfer
+- Automatically creates destination directories if they don't exist
+- Create empty files (useful for completion flags like `.fin` files)
+- Transfer to multiple destinations in sequence
+- Support for both `push` (from source) and `pull` (to destination) operations
 
 ### Configuration
 
@@ -94,28 +101,17 @@ JSON configs for transfers can be defined as follows:
 
 WinRM transfers work differently from traditional protocols:
 
-1. **File listing**: Uses PowerShell `Get-ChildItem` to list and filter files
-2. **File transfer**:
-   - **Push**: Reads local file, base64 encodes it, sends via PowerShell to remote machine
-   - **Pull**: Reads remote file via PowerShell, base64 encodes it, sends back and decodes locally
-3. **Post-copy actions**: Uses PowerShell cmdlets like `Move-Item`, `Rename-Item`, and `Remove-Item`
-4. **Directory operations**: Uses `New-Item` with `-ItemType Directory` to create directories
+1. File listing - Uses PowerShell `Get-ChildItem` to list and filter files
+2. File transfer:
+   - Push - Reads local file, sends via PowerShell to remote machine, uploading chunk-by-chunk
+   - Pull - Reads remote file via PowerShell, base64 encodes it, sends back and decodes locally
+3. Post-copy actions - Uses PowerShell cmdlets like `Move-Item`, `Rename-Item`, and `Remove-Item`
+4. Directory operations - Uses `New-Item` with `-ItemType Directory` to create directories
 
 ### Limitations
 
-- **Performance**: Base64 encoding/decoding adds overhead for large files
-- **Binary files**: All files are treated as binary and encoded/decoded
-- **File permissions**: Limited permission management compared to native protocols
-- **Concurrent transfers**: Each file transfer requires a separate WinRM session
-
-### Use Cases
-
-WinRM transfers are ideal for:
-
-- Windows environments where WinRM is already configured
-- Scenarios requiring PowerShell-based file operations
-- Networks where traditional file transfer protocols are blocked
-- Integration with Windows-specific workflows and permissions
+- Limited permission management compared to native protocols. This does not take into account any ownership. The files are transferred as the user passed in the task definition.
+- Each file transfer requires a separate WinRM session/connection.
 
 # Configuration
 
@@ -125,14 +121,9 @@ JSON configs for transfers can be defined as follows:
 
 WinRM executions allow you to run PowerShell commands and scripts on remote Windows machines. The execution handler connects via WinRM (Windows Remote Management) and executes commands in a PowerShell session.
 
-**Key Features:**
+This addon supports both NTLM/Basic authentication and certificate-based authentication.
 
-- Execute PowerShell commands and scripts remotely
-- Support for command timeouts when used within a batch
-- Full stdout/stderr logging
-- Supports both NTLM/Basic authentication and certificate-based authentication
-
-**Example Configuration:**
+## Example Configuration with NTLM auth
 
 ```json
 {
@@ -160,7 +151,7 @@ The above example will:
 3. Execute the PowerShell command `Get-ChildItem | Out-String`
 4. Log all output to the OTF logs
 
-**Certificate-Based Authentication Example:**
+### Example Configuration with Certificate-Based Authentication
 
 ```json
 {
@@ -182,7 +173,7 @@ The above example will:
 }
 ```
 
-**Using with Batches and Timeouts:**
+## Usage with Batches and Timeouts
 
 When used within a batch task, you can specify a timeout to automatically terminate long-running commands:
 
@@ -205,13 +196,17 @@ The timeout will:
 - Allow the batch to continue or fail based on the `continue_on_fail` setting
 - Log the termination for debugging purposes
 
-**Important Notes:**
+## Important Points
 
 - Commands are executed in PowerShell, so you can use PowerShell syntax and cmdlets
 - The `directory` attribute changes the working directory before executing the command
 - WinRM uses a polling mechanism with a 20-second operation timeout for output, as such when a kill/timeout occurs, there may be up to a 20-second delay before the thread exits cleanly
 
 # WinRM Configuration
+
+For basic WinRM setup you can follow the steps below. It's not recommended to use self-signed certificates in production.
+
+This can be set up on a Windows 10/11 machine too for easily testing on a local machine.
 
 ## Prerequisites - Create Local User (Windows Server)
 
@@ -332,7 +327,7 @@ p = Protocol(
 
 ## Troubleshooting
 
-- **InvalidCredentialsError**: Ensure the correct authentication method is enabled and `LocalAccountTokenFilterPolicy` is set for local admin accounts
-- **Connection refused**: Check Windows Firewall allows port 5986 (HTTPS) or 5985 (HTTP)
-- **Certificate errors**: Verify client certificate is imported to both `Root` and `TrustedPeople` stores and properly mapped to user
-- **Username formats**: Try different formats: `otf`, `.\\otf`, or `HOSTNAME\\otf`
+- **InvalidCredentialsError** - Ensure the correct authentication method is enabled and `LocalAccountTokenFilterPolicy` is set for local admin accounts
+- **Connection refused** - Check Windows Firewall allows port 5986 (HTTPS) or 5985 (HTTP)
+- **Certificate errors** - Verify client certificate is imported to both `Root` (if using a self-signed cert) and `TrustedPeople` stores and properly mapped to user
+- **Username formats** - Try different formats: `otf`, `.\\otf`, or `HOSTNAME\\otf`

@@ -216,11 +216,20 @@ All operations log to a task-specific logger with hostname prefixes for debuggin
 
 ## Limitations
 
-- **Performance**: Base64 encoding/decoding adds overhead for large files
+- **Performance**: Base64 encoding/decoding adds ~33% overhead for large files
 - **Binary Handling**: All files treated as binary for safe transfer
 - **Direct Transfers**: No direct remote-to-remote transfers supported (must proxy through local machine)
 - **Permission Management**: Limited to basic Windows permission operations
 - **Concurrent Operations**: Each operation requires a separate WinRM session
+- **Large Files**: May timeout with default WinRM settings - chunking strategy recommended for files >100MB
+
+### Known Linting Warnings (Expected)
+
+The following unused argument warnings are expected because methods must match abstract method signatures from the parent class:
+
+- `transfer_files()` - Arguments `files`, `remote_spec`, `dest_remote_handler` unused (method returns error as direct transfer not supported)
+- `pull_files()` - Argument `files` unused (method returns error)
+- `push_files_from_worker()` - Argument `file_list` unused (uses directory listing instead)
 
 ## Testing
 
@@ -242,7 +251,10 @@ All operations log to a task-specific logger with hostname prefixes for debuggin
 - `winrm_client()` - Creates WinRM client for setup/teardown
 - `remote_test_dir()` - Creates temporary test directories on Windows
 - `local_test_dir()` - Creates temporary local test directories
-- Helper functions for file creation and verification on Windows
+- Helper functions for file creation and verification on Windows:
+  - `create_remote_file()` - Creates files on Windows via WinRM
+  - `check_remote_file_exists()` - Checks file existence
+  - `get_remote_file_content()` - Reads file content
 
 ## Dependencies
 
@@ -283,3 +295,44 @@ All operations log to a task-specific logger with hostname prefixes for debuggin
 - Compression support for transfer optimization
 - Direct remote-to-remote transfer support via intermediate WinRM calls
 - Windows Event Log integration for execution tracking
+
+## Best Practices for Development
+
+### PowerShell Command Construction
+
+- **Always** wrap PowerShell scripts in `powershell.exe -Command "..."`
+- Use single-line commands or semicolon-separated statements
+- Escape double quotes within the command string
+- Handle errors with try/catch blocks in PowerShell
+
+### WinRM Session Management
+
+- Each operation opens/closes a shell - this is intentional for isolation
+- Shell IDs should be stored for cleanup during kill operations
+- Connection errors should be retried with exponential backoff
+
+### File Path Handling
+
+- Windows uses backslashes (`\`) - ensure proper escaping in PowerShell strings
+- Use `os.path.join()` for local paths, string concatenation for remote Windows paths
+- Test with UNC paths (`\\server\share\file.txt`)
+- Use ntpath.join for Windows remote paths
+
+### Authentication Best Practices
+
+- Certificate files are created temporarily and cleaned up
+- Passwords should be retrieved from secure storage (not hardcoded)
+- Support for domain accounts: `DOMAIN\username` format
+
+## Code Review Checklist
+
+When reviewing WinRM code changes:
+
+- [ ] All PowerShell commands wrapped in `powershell.exe -Command`
+- [ ] Error handling with try/catch in PowerShell scripts
+- [ ] Shell cleanup in finally blocks
+- [ ] Proper logging with hostname prefixes
+- [ ] Base64 encoding/decoding for binary files
+- [ ] Path escaping for Windows paths
+- [ ] Return code checking for all WinRM operations
+- [ ] Abstract method signatures match parent class exactly

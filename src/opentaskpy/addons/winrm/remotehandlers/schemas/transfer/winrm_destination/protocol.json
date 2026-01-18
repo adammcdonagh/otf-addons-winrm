@@ -1,45 +1,45 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "http://localhost/transfer/winrm_destination/protocol.json",
   "type": "object",
   "properties": {
     "name": {
       "type": "string",
-      "const": "opentaskpy.addons.winrm.remotehandlers.transfer.WinRMTransfer"
+      "enum": ["opentaskpy.addons.winrm.remotehandlers.winrm.WinRMTransfer"]
+    },
+    "port": {
+      "type": "integer"
     },
     "server_cert_validation": {
       "type": "string",
       "enum": ["validate", "ignore"],
-      "default": "validate",
-      "description": "Whether to validate the server certificate. Use 'ignore' for self-signed certificates"
+      "default": "validate"
+    },
+    "retry": {
+      "type": "boolean",
+      "default": true
+    },
+    "timeout": {
+      "type": "integer"
     },
     "credentials": {
       "type": "object",
       "properties": {
         "username": {
-          "type": "string",
-          "description": "Username for WinRM authentication"
+          "type": "string"
         },
         "password": {
-          "type": "string",
-          "description": "Password for NTLM/Basic authentication"
+          "type": "string"
         },
         "transport": {
           "type": "string",
-          "enum": ["ntlm", "basic", "ssl", "certificate"],
-          "description": "Authentication transport method"
-        },
-        "port": {
-          "type": "integer",
-          "default": 5986,
-          "description": "WinRM port (5986 for HTTPS, 5985 for HTTP)"
+          "enum": ["ntlm", "basic", "ssl", "certificate"]
         },
         "cert_pem": {
-          "type": "string",
-          "description": "Client certificate in PEM format (for certificate authentication)"
+          "type": "string"
         },
         "cert_key_pem": {
-          "type": "string",
-          "description": "Client certificate private key in PEM format (for certificate authentication)"
+          "type": "string"
         }
       },
       "required": ["username", "transport"],
@@ -68,8 +68,10 @@
             "required": ["cert_pem", "cert_key_pem"]
           }
         }
-      ]
+      ],
+      "additionalProperties": false
     }
   },
-  "required": ["name", "credentials"]
+  "required": ["name", "credentials"],
+  "additionalProperties": false
 }
