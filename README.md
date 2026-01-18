@@ -1,6 +1,5 @@
 [![PyPi](https://img.shields.io/pypi/v/otf-addons-winrm.svg)](https://pypi.org/project/otf-addons-winrm/)
 ![unittest status](https://github.com/adammcdonagh/otf-addons-winrm/actions/workflows/test.yml/badge.svg)
-[![Coverage](https://img.shields.io/codecov/c/github/adammcdonagh/otf-addons-winrm.svg)](https://codecov.io/gh/adammcdonagh/otf-addons-winrm)
 [![License](https://img.shields.io/github/license/adammcdonagh/otf-addons-winrm.svg)](https://github.com/adammcdonagh/otf-addons-winrm/blob/master/LICENSE)
 [![Issues](https://img.shields.io/github/issues/adammcdonagh/otf-addons-winrm.svg)](https://github.com/adammcdonagh/otf-addons-winrm/issues)
 [![Stars](https://img.shields.io/github/stars/adammcdonagh/otf-addons-winrm.svg)](https://github.com/adammcdonagh/otf-addons-winrm/stargazers)
@@ -8,10 +7,10 @@
 <h1>otf-addons-winrm</h1>
 
 - [Transfers](#transfers)
-  - [Supported features](#supported-features)
-  - [Configuration](#configuration)
-  - [Transfer Process](#transfer-process)
-  - [Limitations](#limitations)
+    - [Supported features](#supported-features)
+    - [Configuration](#configuration)
+    - [Transfer Process](#transfer-process)
+    - [Limitations](#limitations)
 - [Configuration](#configuration-1)
 - [Executions](#executions)
   - [Example Configuration with NTLM auth](#example-configuration-with-ntlm-auth)
