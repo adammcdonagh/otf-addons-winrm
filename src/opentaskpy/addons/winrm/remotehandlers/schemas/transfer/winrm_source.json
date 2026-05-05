@@ -24,6 +24,9 @@
     "postCopyAction": {
       "$ref": "winrm_source/postCopyAction.json"
     },
+    "encryption": {
+      "$ref": "http://localhost/transfer/encryption.json"
+    },
     "protocol": {
       "$ref": "winrm_source/protocol.json"
     }
