@@ -18,6 +18,9 @@
       "enum": ["push", "pull"],
       "default": "push"
     },
+    "encryption": {
+      "$ref": "http://localhost/transfer/encryption.json"
+    },
     "rename": {
       "$ref": "winrm_destination/rename.json"
     },
